@@ -71,6 +71,8 @@ func (s *LivepeerServer) StartCliWebserver(bindAddr string) {
 	srv.ListenAndServe()
 }
 
+func (s *LivepeerServer) setOnChainConfig() {}
+
 func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 	// Override default mux because pprof only uses the default mux
 	// We really don't want to accidentally pull pprof into other listeners.
@@ -214,49 +216,60 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 		}
 
 		if t.Status == "Registered" {
-			glog.Error("Orchestrator is already registered")
+			respondWithError(w, "orchestrator already registered", http.StatusBadRequest)
+			return
+		}
+
+		ok, err := s.LivepeerNode.Eth.CurrentRoundLocked()
+		if err != nil {
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			respondWithError(w, "current round is locked", http.StatusInternalServerError)
 			return
 		}
 
 		if err := r.ParseForm(); err != nil {
-			glog.Errorf("Parse Form Error: %v", err)
+			respondWithError(w, fmt.Sprintf("Parse form error: %v", err), http.StatusInternalServerError)
 			return
 		}
 
 		blockRewardCutStr := r.FormValue("blockRewardCut")
 		if blockRewardCutStr == "" {
-			glog.Errorf("Need to provide block reward cut")
+			respondWithError(w, "Need to provide block reward cut", http.StatusBadRequest)
 			return
 		}
 		blockRewardCut, err := strconv.ParseFloat(blockRewardCutStr, 64)
 		if err != nil {
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			glog.Error(err)
 			return
 		}
 
 		feeShareStr := r.FormValue("feeShare")
 		if feeShareStr == "" {
-			glog.Errorf("Need to provide fee share")
+			respondWithError(w, "Need to provide fee share", http.StatusBadRequest)
 			return
 		}
 		feeShare, err := strconv.ParseFloat(feeShareStr, 64)
 		if err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		if err := s.setOrchestratorPriceInfo(r.FormValue("pricePerUnit"), r.FormValue("pixelsPerUnit")); err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		serviceURI := r.FormValue("serviceURI")
 		if serviceURI == "" {
-			glog.Errorf("Need to provide a service URI")
+			respondWithError(w, "Need to provide a service URI", http.StatusInternalServerError)
 			return
 		}
 		if _, err := url.ParseRequestURI(serviceURI); err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
@@ -264,7 +277,7 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 		if unbondingLockIDStr != "" {
 			unbondingLockID, err := lpcommon.ParseBigInt(unbondingLockIDStr)
 			if err != nil {
-				glog.Error(err)
+				respondWithError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 
@@ -272,13 +285,13 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 
 			tx, err := s.LivepeerNode.Eth.RebondFromUnbonded(s.LivepeerNode.Eth.Account().Address, unbondingLockID)
 			if err != nil {
-				glog.Error(err)
+				respondWithError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 
 			err = s.LivepeerNode.Eth.CheckTx(tx)
 			if err != nil {
-				glog.Error(err)
+				respondWithError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
@@ -287,7 +300,7 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 		if amountStr != "" {
 			amount, err := lpcommon.ParseBigInt(amountStr)
 			if err != nil {
-				glog.Error(err)
+				respondWithError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 
@@ -296,13 +309,13 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 
 				tx, err := s.LivepeerNode.Eth.Bond(amount, s.LivepeerNode.Eth.Account().Address)
 				if err != nil {
-					glog.Error(err)
+					respondWithError(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
 
 				err = s.LivepeerNode.Eth.CheckTx(tx)
 				if err != nil {
-					glog.Error(err)
+					respondWithError(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
 			}
@@ -312,73 +325,87 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 
 		tx, err := s.LivepeerNode.Eth.Transcoder(eth.FromPerc(blockRewardCut), eth.FromPerc(feeShare))
 		if err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		err = s.LivepeerNode.Eth.CheckTx(tx)
 		if err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		currentServiceURI, err := s.LivepeerNode.Eth.GetServiceURI(s.LivepeerNode.Eth.Account().Address)
 		if err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		if currentServiceURI != serviceURI {
 			if err := s.setServiceURI(serviceURI); err != nil {
+				respondWithError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
+
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("success"))
 	})
 
 	//Set transcoder config on-chain.
 	mux.HandleFunc("/setOrchestratorConfig", func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
-			glog.Errorf("Parse Form Error: %v", err)
+			respondWithError(w, fmt.Sprintf("Parse form error: %v", err.Error()), http.StatusInternalServerError)
 			return
 		}
 
 		blockRewardCutStr := r.FormValue("blockRewardCut")
 		if blockRewardCutStr == "" {
-			glog.Errorf("Need to provide block reward cut")
+			respondWithError(w, "Need to provide block reward cut", http.StatusInternalServerError)
 			return
 		}
 		blockRewardCut, err := strconv.ParseFloat(blockRewardCutStr, 64)
 		if err != nil {
-			glog.Errorf("Cannot convert block reward cut: %v", err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		feeShareStr := r.FormValue("feeShare")
 		if feeShareStr == "" {
-			glog.Errorf("Need to provide fee share")
+			respondWithError(w, "Need to provide fee share", http.StatusInternalServerError)
 			return
 		}
 		feeShare, err := strconv.ParseFloat(feeShareStr, 64)
 		if err != nil {
-			glog.Errorf("Cannot convert fee share: %v", err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		if err := s.setOrchestratorPriceInfo(r.FormValue("pricePerUnit"), r.FormValue("pixelsPerUnit")); err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		t, err := s.LivepeerNode.Eth.GetTranscoder(s.LivepeerNode.Eth.Account().Address)
 		if err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		ok, err := s.LivepeerNode.Eth.CurrentRoundLocked()
+		if err != nil {
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if !ok {
+			respondWithError(w, "current round is locked", http.StatusInternalServerError)
 			return
 		}
 
 		if t.RewardCut.Cmp(eth.FromPerc(blockRewardCut)) != 0 || t.FeeShare.Cmp(eth.FromPerc(feeShare)) != 0 {
 			tx, err := s.LivepeerNode.Eth.Transcoder(eth.FromPerc(blockRewardCut), eth.FromPerc(feeShare))
 			if err != nil {
-				glog.Error(err)
+				respondWithError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 
@@ -386,22 +413,24 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 
 			err = s.LivepeerNode.Eth.CheckTx(tx)
 			if err != nil {
-				glog.Error(err)
+				respondWithError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
 
 		serviceURI := r.FormValue("serviceURI")
 		if _, err := url.ParseRequestURI(serviceURI); err != nil {
-			glog.Error(err)
+			respondWithError(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		if t.ServiceURI != serviceURI {
 			if err := s.setServiceURI(serviceURI); err != nil {
+				respondWithError(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
+
 	})
 
 	//Bond some amount of tokens to an orchestrator.
