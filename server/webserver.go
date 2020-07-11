@@ -8,6 +8,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -1183,6 +1184,22 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 }
 
 func (s *LivepeerServer) setOrchestratorPriceInfo(pricePerUnitStr, pixelsPerUnitStr string) error {
+
+	ok, err := regexp.MatchString("^[0-9]+$", pricePerUnitStr)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("pricePerUnit is not a valid integer, provided %v", pricePerUnitStr)
+	}
+
+	ok, err = regexp.MatchString("^[0-9]+$", pixelsPerUnitStr)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("pixelsPerUnit is not a valid integer, provided %v", pixelsPerUnitStr)
+	}
 
 	pricePerUnit, err := strconv.ParseInt(pricePerUnitStr, 10, 64)
 	if err != nil {
