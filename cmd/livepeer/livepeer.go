@@ -552,7 +552,15 @@ func main() {
 				}
 				sm = rc
 			} else {
-				sm = pm.NewSenderMonitor(recipientAddr, n.Eth, senderWatcher, timeWatcher, n.Database, cleanupInterval, smTTL)
+				smCfg := &pm.LocalSenderMonitorConfig{
+					Claimant:        recipientAddr,
+					CleanupInterval: cleanupInterval,
+					TTL:             smTTL,
+					RedeemGas:       redeemGas,
+					SuggestGasPrice: backend.SuggestGasPrice,
+					RPCTimeout:      ethRPCTimeout,
+				}
+				sm = pm.NewSenderMonitor(smCfg, n.Eth, senderWatcher, timeWatcher, n.Database)
 			}
 
 			// Start sender monitor
@@ -617,10 +625,18 @@ func main() {
 		}
 
 		if n.NodeType == core.RedeemerNode {
+			smCfg := &pm.LocalSenderMonitorConfig{
+				Claimant:        recipientAddr,
+				CleanupInterval: cleanupInterval,
+				TTL:             smTTL,
+				RedeemGas:       redeemGas,
+				SuggestGasPrice: backend.SuggestGasPrice,
+				RPCTimeout:      ethRPCTimeout,
+			}
 			r, err := server.NewRedeemer(
 				recipientAddr,
 				n.Eth,
-				pm.NewSenderMonitor(recipientAddr, n.Eth, senderWatcher, timeWatcher, n.Database, cleanupInterval, smTTL),
+				pm.NewSenderMonitor(smCfg, n.Eth, senderWatcher, timeWatcher, n.Database),
 			)
 			if err != nil {
 				glog.Errorf("Unable to create redeemer: %v", err)
