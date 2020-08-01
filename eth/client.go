@@ -760,76 +760,94 @@ func (c *client) Reward() (*types.Transaction, error) {
 	// reward = (current mintable tokens for the round * active transcoder stake) / total active stake
 	reward := new(big.Int).Div(new(big.Int).Mul(mintable, t.DelegatedStake), totalBonded)
 
-	transcoders, err := c.TranscoderPool()
+	hints, err := c.simulateTranscoderPoolUpdate(addr, reward.Add(reward, t.DelegatedStake))
 	if err != nil {
-		return nil, errors.Wrap(err, "unable to get transcoder pool")
+		glog.Error("Unable to calculate hints, submitting reward transaction without hints")
+		return c.BondingManagerSession.Reward()
 	}
-
-	hints := c.getStakingHints(addr, ethcommon.Address{}, reward, transcoders)
-	return c.RewardWithHint(hints.newPosPrev, hints.newPosNext)
+	if hints == nil {
+		// No hints calculated and no error:  transcoder is no longer part of the pool
+		// This should  not happen in practice but good to sanity check.
+		return nil, nil
+	}
+	return c.RewardWithHint(hints.posPrev, hints.posNext)
 
 }
 
 // Helpers
 
-// getStakingHints returns hints for both the new and old (if applicable) delegate
-// amount provided should be negative when unbonding.
-func (c *client) getStakingHints(newDel ethcommon.Address, oldDel ethcommon.Address, amount *big.Int, transcoders []*lpTypes.Transcoder) *struct {
-	oldPosNext ethcommon.Address
-	oldPosPrev ethcommon.Address
-	newPosNext ethcommon.Address
-	newPosPrev ethcommon.Address
-} {
+// simulateTranscoderPoolUpdate simulated an  update to the transcoder pool and returns the positional hints for a delegator accordingly.
+// if the delegator will not be in the updated set 'nil' will be returned.
+func (c *client) simulateTranscoderPoolUpdate(del ethcommon.Address, newStake *big.Int) (*struct {
+	posNext ethcommon.Address
+	posPrev ethcommon.Address
+}, error) {
 
-	for _, t := range transcoders {
-		if t.Address == newDel {
-			t.DelegatedStake = t.DelegatedStake.Add(t.DelegatedStake, amount)
-		}
-		if t.Address == oldDel && oldDel != newDel {
-			t.DelegatedStake = t.DelegatedStake.Sub(t.DelegatedStake, amount)
+	// get max pool size
+	maxSize, err := c.GetTranscoderPoolMaxSize()
+	if err != nil {
+		return nil, err
+	}
+	maxSizeInt := int(maxSize.Int64())
+
+	// get the transcoder  pool
+	transcoders, err := c.TranscoderPool()
+	if err != nil {
+		return nil, err
+	}
+
+	// if the transcoder pool is full and the newStake for 'del' is lower  than that of the last transcoders
+	// 'del' will not be in the active set and thus there are no hints to return.
+	if len(transcoders) == maxSizeInt && newStake.Cmp(transcoders[maxSizeInt-1].DelegatedStake) <= 0 {
+		return nil, nil
+	}
+
+	// Find the transcoder and update it's stake
+	for i, t := range transcoders {
+		// if 'del' is in the pool simply update it's stake
+		if t.Address == del {
+			t.DelegatedStake = newStake
+		} else if i == len(transcoders)-1 {
+			// 'del' is not in the pool, insert it and sort later
+			transcoders = append(transcoders, &lpTypes.Transcoder{
+				Address:        del,
+				DelegatedStake: newStake,
+			})
 		}
 	}
 
+	// re-sort the list after the stake update
 	sort.SliceStable(transcoders, func(i, j int) bool {
-
 		return transcoders[i].DelegatedStake.Cmp(transcoders[j].DelegatedStake) > 0
 	})
 
-	hints := new(struct {
-		oldPosNext ethcommon.Address
-		oldPosPrev ethcommon.Address
-		newPosNext ethcommon.Address
-		newPosPrev ethcommon.Address
-	})
-	for i, t := range transcoders {
-		if t.Address == oldDel && oldDel != newDel {
-			if i == 0 && len(transcoders) > 1 {
-				// head
-				hints.oldPosNext = transcoders[i+1].Address
-			} else if i == len(transcoders)-1 && len(transcoders) > 1 {
-				// tail
-				hints.oldPosPrev = transcoders[i-1].Address
-			} else {
-				hints.oldPosNext = transcoders[i+1].Address
-				hints.oldPosPrev = transcoders[i-1].Address
-			}
-		}
-		if t.Address == newDel {
-			if i == 0 && len(transcoders) > 1 {
-				// head
-				hints.newPosNext = transcoders[i+1].Address
-			} else if i == len(transcoders)-1 && len(transcoders) > 1 {
-				// tail
-				hints.newPosPrev = transcoders[i-1].Address
-			} else {
-				hints.newPosNext = transcoders[i+1].Address
-				hints.newPosPrev = transcoders[i-1].Address
-			}
-		}
-
+	// if the list was full evict the last transcoder
+	if len(transcoders) > maxSizeInt {
+		transcoders = transcoders[1:]
 	}
 
-	return hints
+	hints := new(struct {
+		posNext ethcommon.Address
+		posPrev ethcommon.Address
+	})
+
+	// do a linear search to get the previous and next transcoder relative to 'del'
+	for i, t := range transcoders {
+		if t.Address == del {
+			if i == 0 && len(transcoders) > 1 {
+				// 'del' is head
+				hints.posNext = transcoders[i+1].Address
+			} else if i == len(transcoders)-1 && len(transcoders) > 1 {
+				// 'del' is tail
+				hints.posPrev = transcoders[i-1].Address
+			} else {
+				hints.posNext = transcoders[i+1].Address
+				hints.posPrev = transcoders[i-1].Address
+			}
+		}
+	}
+
+	return hints, nil
 }
 
 func (c *client) ContractAddresses() map[string]ethcommon.Address {
