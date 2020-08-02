@@ -762,7 +762,7 @@ func (c *client) Reward() (*types.Transaction, error) {
 
 	hints, err := c.simulateTranscoderPoolUpdate(addr, reward.Add(reward, t.DelegatedStake))
 	if err != nil {
-		glog.Error("Unable to calculate hints, submitting reward transaction without hints. err=%v", err)
+		glog.Errorf("Unable to calculate hints, submitting reward transaction without hints. err=%v", err)
 	}
 	return c.RewardWithHint(hints.PosPrev, hints.PosNext)
 
