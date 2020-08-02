@@ -848,6 +848,7 @@ func localSenderMonitorFixture() (ethcommon.Address, *stubBroker, *stubSenderMan
 	smgr := newStubSenderManager()
 	tm := &stubTimeManager{
 		transcoderPoolSize: big.NewInt(5),
+		round:              big.NewInt(100),
 	}
 	return claimant, b, smgr, tm
 }
