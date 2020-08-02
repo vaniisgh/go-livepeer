@@ -90,53 +90,51 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 		}
 
 		pricePerUnit := r.FormValue("maxPricePerUnit")
-		pr, err := strconv.ParseInt(pricePerUnit, 10, 64)
-		if err != nil {
-			glog.Errorf("Error converting string to int64: %v\n", err)
-			return
-		}
-
 		pixelsPerUnit := r.FormValue("pixelsPerUnit")
-		px, err := strconv.ParseInt(pixelsPerUnit, 10, 64)
-		if err != nil {
-			glog.Errorf("Error converting string to int64: %v\n", err)
-			return
-		}
-		if px <= 0 {
-			glog.Errorf("pixels per unit must be greater than 0, provided %d\n", px)
-			return
-		}
 
-		var price *big.Rat
-		if pr > 0 {
-			price = big.NewRat(pr, px)
+		if pricePerUnit != "" && pixelsPerUnit != "" {
+			pr, err := strconv.ParseInt(pricePerUnit, 10, 64)
+			if err != nil {
+				glog.Errorf("Error converting string to int64: %v\n", err)
+				return
+			}
+
+			px, err := strconv.ParseInt(pixelsPerUnit, 10, 64)
+			if err != nil {
+				glog.Errorf("Error converting string to int64: %v\n", err)
+				return
+			}
+			if px <= 0 {
+				glog.Errorf("pixels per unit must be greater than 0, provided %d\n", px)
+				return
+			}
+
+			var price *big.Rat
+			if pr > 0 {
+				price = big.NewRat(pr, px)
+			}
+
+			BroadcastCfg.SetMaxPrice(price)
+
+			glog.Infof("Maximum transcoding price: %d per %q pixels\n", pr, px)
 		}
 
 		transcodingOptions := r.FormValue("transcodingOptions")
-		if transcodingOptions == "" {
-			glog.Errorf("Need to provide transcoding options")
-			return
-		}
-
-		profiles := []ffmpeg.VideoProfile{}
-		for _, pName := range strings.Split(transcodingOptions, ",") {
-			p, ok := ffmpeg.VideoProfileLookup[pName]
-			if ok {
-				profiles = append(profiles, p)
+		if transcodingOptions != "" {
+			profiles := []ffmpeg.VideoProfile{}
+			for _, pName := range strings.Split(transcodingOptions, ",") {
+				p, ok := ffmpeg.VideoProfileLookup[pName]
+				if ok {
+					profiles = append(profiles, p)
+				}
 			}
+			if len(profiles) == 0 {
+				glog.Errorf("Invalid transcoding options: %v", transcodingOptions)
+				return
+			}
+			BroadcastJobVideoProfiles = profiles
+			glog.Infof("Transcode Job Type: %v", BroadcastJobVideoProfiles)
 		}
-		if len(profiles) == 0 {
-			glog.Errorf("Invalid transcoding options: %v", transcodingOptions)
-			return
-		}
-		BroadcastCfg.SetMaxPrice(price)
-		BroadcastJobVideoProfiles = profiles
-		if price != nil {
-			glog.Infof("Maximum transcoding price: %d per %q pixels\n", pr, px)
-		} else {
-			glog.Info("Maximum transcoding price per pixel not set, broadcaster is currently set to accept ANY price.\n")
-		}
-		glog.Infof("Transcode Job Type: %v", BroadcastJobVideoProfiles)
 	})
 
 	mux.HandleFunc("/getBroadcastConfig", func(w http.ResponseWriter, r *http.Request) {
@@ -342,31 +340,37 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 			return
 		}
 
-		blockRewardCutStr := r.FormValue("blockRewardCut")
-		if blockRewardCutStr == "" {
-			glog.Errorf("Need to provide block reward cut")
-			return
+		pixels := r.FormValue("pixelsPerUnit")
+		price := r.FormValue("pricePerUnit")
+		if pixels != "" && price != "" {
+			if err := s.setOrchestratorPriceInfo(price, pixels); err != nil {
+				glog.Error(err)
+				return
+			}
 		}
-		blockRewardCut, err := strconv.ParseFloat(blockRewardCutStr, 64)
-		if err != nil {
-			glog.Errorf("Cannot convert block reward cut: %v", err)
-			return
+
+		var (
+			blockRewardCut float64
+			feeShare       float64
+			err            error
+		)
+		blockRewardCutStr := r.FormValue("blockRewardCut")
+
+		if blockRewardCutStr != "" {
+			blockRewardCut, err = strconv.ParseFloat(blockRewardCutStr, 64)
+			if err != nil {
+				glog.Errorf("Cannot convert block reward cut: %v", err)
+				return
+			}
 		}
 
 		feeShareStr := r.FormValue("feeShare")
-		if feeShareStr == "" {
-			glog.Errorf("Need to provide fee share")
-			return
-		}
-		feeShare, err := strconv.ParseFloat(feeShareStr, 64)
-		if err != nil {
-			glog.Errorf("Cannot convert fee share: %v", err)
-			return
-		}
-
-		if err := s.setOrchestratorPriceInfo(r.FormValue("pricePerUnit"), r.FormValue("pixelsPerUnit")); err != nil {
-			glog.Error(err)
-			return
+		if feeShareStr != "" {
+			feeShare, err = strconv.ParseFloat(feeShareStr, 64)
+			if err != nil {
+				glog.Errorf("Cannot convert fee share: %v", err)
+				return
+			}
 		}
 
 		t, err := s.LivepeerNode.Eth.GetTranscoder(s.LivepeerNode.Eth.Account().Address)
@@ -375,7 +379,7 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 			return
 		}
 
-		if t.RewardCut.Cmp(eth.FromPerc(blockRewardCut)) != 0 || t.FeeShare.Cmp(eth.FromPerc(feeShare)) != 0 {
+		if feeShareStr != "" && blockRewardCutStr != "" && t.RewardCut.Cmp(eth.FromPerc(blockRewardCut)) != 0 || t.FeeShare.Cmp(eth.FromPerc(feeShare)) != 0 {
 			tx, err := s.LivepeerNode.Eth.Transcoder(eth.FromPerc(blockRewardCut), eth.FromPerc(feeShare))
 			if err != nil {
 				glog.Error(err)
@@ -392,14 +396,16 @@ func (s *LivepeerServer) cliWebServerHandlers(bindAddr string) *http.ServeMux {
 		}
 
 		serviceURI := r.FormValue("serviceURI")
-		if _, err := url.ParseRequestURI(serviceURI); err != nil {
-			glog.Error(err)
-			return
-		}
-
-		if t.ServiceURI != serviceURI {
-			if err := s.setServiceURI(serviceURI); err != nil {
+		if serviceURI != "" {
+			if _, err := url.ParseRequestURI(serviceURI); err != nil {
+				glog.Error(err)
 				return
+			}
+
+			if t.ServiceURI != serviceURI {
+				if err := s.setServiceURI(serviceURI); err != nil {
+					return
+				}
 			}
 		}
 	})
