@@ -749,7 +749,7 @@ func (c *client) Reward() (*types.Transaction, error) {
 
 	mintable, err := c.CurrentMintableTokens()
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to get curernt mintable tokens")
+		return nil, errors.Wrapf(err, "unable to get current mintable tokens")
 	}
 
 	totalBonded, err := c.GetTotalBonded()
@@ -762,7 +762,7 @@ func (c *client) Reward() (*types.Transaction, error) {
 
 	hints, err := c.simulateTranscoderPoolUpdate(addr, reward.Add(reward, t.DelegatedStake))
 	if err != nil {
-		glog.Errorf("Unable to calculate hints, submitting reward transaction without hints. err=%v", err)
+		return nil, errors.Wrapf(err, "Unable to calculate hints, submitting reward transaction without hints")
 	}
 	return c.RewardWithHint(hints.PosPrev, hints.PosNext)
 
@@ -770,8 +770,8 @@ func (c *client) Reward() (*types.Transaction, error) {
 
 // Helpers
 
-// simulateTranscoderPoolUpdate simulated an  update to the transcoder pool and returns the positional hints for a delegator accordingly.
-// if the delegator will not be in the updated set 'nil' will be returned.
+// simulateTranscoderPoolUpdate simulates an update to the transcoder pool and returns the positional hints for a transcoder accordingly.
+// if the transcoder will not be in the updated set no hints will be returned
 func (c *client) simulateTranscoderPoolUpdate(del ethcommon.Address, newStake *big.Int) (lpTypes.StakingHints, error) {
 
 	// get max pool size
@@ -781,13 +781,13 @@ func (c *client) simulateTranscoderPoolUpdate(del ethcommon.Address, newStake *b
 	}
 	maxSizeInt := int(maxSize.Int64())
 
-	// get the transcoder  pool
+	// get the transcoder pool
 	transcoders, err := c.TranscoderPool()
 	if err != nil {
 		return lpTypes.StakingHints{}, err
 	}
 
-	// if the transcoder pool is full and the newStake for 'del' is lower  than that of the last transcoders
+	// if the transcoder pool is full and the newStake for 'del' is less than that of the last transcoder
 	// 'del' will not be in the active set and thus there are no hints to return.
 	if len(transcoders) == maxSizeInt && newStake.Cmp(transcoders[maxSizeInt-1].DelegatedStake) <= 0 {
 		return lpTypes.StakingHints{}, nil
