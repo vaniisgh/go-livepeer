@@ -742,9 +742,14 @@ func (c *client) Vote(pollAddr ethcommon.Address, choiceID *big.Int) (*types.Tra
 func (c *client) Reward() (*types.Transaction, error) {
 	addr := c.accountManager.Account().Address
 
-	t, err := c.GetTranscoder(addr)
+	currentRound, err := c.CurrentRound()
 	if err != nil {
-		return nil, errors.Wrapf(err, "unable to get transcoder %v", addr.Hex())
+		return nil, err
+	}
+
+	ep, err := c.GetTranscoderEarningsPoolForRound(c.accountManager.Account().Address, currentRound)
+	if err != nil {
+		return nil, err
 	}
 
 	mintable, err := c.CurrentMintableTokens()
@@ -758,14 +763,13 @@ func (c *client) Reward() (*types.Transaction, error) {
 	}
 
 	// reward = (current mintable tokens for the round * active transcoder stake) / total active stake
-	reward := new(big.Int).Div(new(big.Int).Mul(mintable, t.DelegatedStake), totalBonded)
+	reward := new(big.Int).Div(new(big.Int).Mul(mintable, ep.TotalStake), totalBonded)
 
-	hints, err := c.simulateTranscoderPoolUpdate(addr, reward.Add(reward, t.DelegatedStake))
+	hints, err := c.simulateTranscoderPoolUpdate(addr, reward.Add(reward, ep.TotalStake))
 	if err != nil {
 		return nil, errors.Wrapf(err, "Unable to calculate hints, submitting reward transaction without hints")
 	}
 	return c.RewardWithHint(hints.PosPrev, hints.PosNext)
-
 }
 
 // Helpers
