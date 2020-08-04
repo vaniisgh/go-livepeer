@@ -102,6 +102,12 @@ func TestSimulateTranscoderPool(t *testing.T) {
 	assert.Equal(hints, lpTypes.StakingHints{
 		PosNext: ethcommon.HexToAddress("aaa"),
 	})
+
+	// transcoder decreases stake , takes the last spt
+	hints = simulateTranscoderPoolUpdate(ethcommon.HexToAddress("aaa"), big.NewInt(0), copyTranscoders(transcoders), false)
+	assert.Equal(hints, lpTypes.StakingHints{
+		PosPrev: ethcommon.HexToAddress("eee"),
+	})
 }
 
 func TestFindTranscoderHints(t *testing.T) {
