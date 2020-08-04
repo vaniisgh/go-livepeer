@@ -21,6 +21,89 @@ func copyTranscoders(transcoders []*lpTypes.Transcoder) []*lpTypes.Transcoder {
 	return cp
 }
 
+func TestSimulateTranscoderPool(t *testing.T) {
+	assert := assert.New(t)
+
+	// use copyTranscoders() to avoid mutating the orignal slice
+	transcoders := []*lpTypes.Transcoder{
+		{
+			Address:        ethcommon.HexToAddress("aaa"),
+			DelegatedStake: big.NewInt(5),
+		},
+		{
+			Address:        ethcommon.HexToAddress("bbb"),
+			DelegatedStake: big.NewInt(4),
+		},
+		{
+			Address:        ethcommon.HexToAddress("ccc"),
+			DelegatedStake: big.NewInt(3),
+		},
+		{
+			Address:        ethcommon.HexToAddress("ddd"),
+			DelegatedStake: big.NewInt(2),
+		},
+		{
+			Address:        ethcommon.HexToAddress("eee"),
+			DelegatedStake: big.NewInt(1),
+		},
+	}
+
+	// transcoder is not in pool and doesn't have enough stake to join the pool
+	hints := simulateTranscoderPoolUpdate(ethcommon.HexToAddress("fff"), big.NewInt(1), copyTranscoders(transcoders), true)
+	assert.Equal(hints, lpTypes.StakingHints{})
+
+	// transcoder is not in pool and pool is full, transcoder joins the list, current tail is evicted
+	pool := copyTranscoders(transcoders)
+	hints = simulateTranscoderPoolUpdate(ethcommon.HexToAddress("fff"), big.NewInt(2), pool, true)
+	assert.Equal(hints, lpTypes.StakingHints{
+		PosPrev: ethcommon.HexToAddress("ddd"),
+	})
+	assert.NotEqual(pool[len(pool)-1].Address, ethcommon.HexToAddress("eee"))
+
+	// transcoder is not in pool and pool is not full
+	// transcoder takes last spot
+	hints = simulateTranscoderPoolUpdate(ethcommon.HexToAddress("fff"), big.NewInt(1), copyTranscoders(transcoders), false)
+	assert.Equal(hints, lpTypes.StakingHints{
+		PosPrev: ethcommon.HexToAddress("eee"),
+	})
+
+	// transcoder is not in pool and pool is not full
+	// transcoder takes first spot
+	hints = simulateTranscoderPoolUpdate(ethcommon.HexToAddress("fff"), big.NewInt(100), copyTranscoders(transcoders), false)
+	assert.Equal(hints, lpTypes.StakingHints{
+		PosNext: ethcommon.HexToAddress("aaa"),
+	})
+
+	// transcoder is not in pool and pool is not full
+	// transcoder takes second spot
+	hints = simulateTranscoderPoolUpdate(ethcommon.HexToAddress("fff"), big.NewInt(5), copyTranscoders(transcoders), false)
+	assert.Equal(hints, lpTypes.StakingHints{
+		PosPrev: ethcommon.HexToAddress("aaa"),
+		PosNext: ethcommon.HexToAddress("bbb"),
+	})
+
+	// last transcoder's stake increases but remains in the last spot
+	hints = simulateTranscoderPoolUpdate(ethcommon.HexToAddress("eee"), big.NewInt(2), copyTranscoders(transcoders), false)
+	assert.Equal(hints, lpTypes.StakingHints{
+		PosPrev: ethcommon.HexToAddress("ddd"),
+	})
+
+	// transcoder is in pool and moves up one from the last spot
+	pool = copyTranscoders(transcoders)
+	hints = simulateTranscoderPoolUpdate(ethcommon.HexToAddress("eee"), big.NewInt(3), pool, false)
+	assert.Equal(hints, lpTypes.StakingHints{
+		PosPrev: ethcommon.HexToAddress("ccc"),
+		PosNext: ethcommon.HexToAddress("ddd"),
+	})
+	assert.Equal(ethcommon.HexToAddress("ddd"), pool[len(pool)-1].Address)
+
+	// transcoder is in pool and takes the first spot
+	hints = simulateTranscoderPoolUpdate(ethcommon.HexToAddress("ccc"), big.NewInt(6), copyTranscoders(transcoders), false)
+	assert.Equal(hints, lpTypes.StakingHints{
+		PosNext: ethcommon.HexToAddress("aaa"),
+	})
+}
+
 func TestFindTranscoderHints(t *testing.T) {
 	assert := assert.New(t)
 

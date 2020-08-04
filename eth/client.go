@@ -787,27 +787,22 @@ func (c *client) Reward() (*types.Transaction, error) {
 // simulateTranscoderPoolUpdate simulates an update to the transcoder pool and returns the positional hints for a transcoder accordingly.
 // if the transcoder will not be in the updated set no hints will be returned
 func simulateTranscoderPoolUpdate(del ethcommon.Address, newStake *big.Int, transcoders []*lpTypes.Transcoder, isFull bool) lpTypes.StakingHints {
-
-	// if the transcoder pool is full and the newStake for 'del' is less than that of the last transcoder
-	// transcoder should become the tail.
-	if isFull && newStake.Cmp(transcoders[len(transcoders)-1].DelegatedStake) <= 0 {
-		return lpTypes.StakingHints{
-			PosPrev: transcoders[len(transcoders)-1].Address,
-		}
-	}
-
 	// Find the transcoder and update it's stake
-	for i, t := range transcoders {
+	inPool := false
+	for _, t := range transcoders {
 		// if 'del' is in the pool simply update it's stake
 		if t.Address == del {
 			t.DelegatedStake = newStake
-		} else if i == len(transcoders)-1 {
-			// 'del' is not in the pool, insert it and sort later
-			transcoders = append(transcoders, &lpTypes.Transcoder{
-				Address:        del,
-				DelegatedStake: newStake,
-			})
+			inPool = true
 		}
+	}
+
+	if !inPool {
+		// 'del' is not in the pool, insert it and sort later
+		transcoders = append(transcoders, &lpTypes.Transcoder{
+			Address:        del,
+			DelegatedStake: newStake,
+		})
 	}
 
 	// re-sort the list after the stake update
@@ -817,7 +812,7 @@ func simulateTranscoderPoolUpdate(del ethcommon.Address, newStake *big.Int, tran
 
 	// if the list was full evict the last transcoder
 	if isFull {
-		transcoders = transcoders[1:]
+		transcoders = transcoders[:len(transcoders)-1]
 	}
 
 	return findTranscoderHints(del, transcoders)
@@ -828,6 +823,7 @@ func findTranscoderHints(del ethcommon.Address, transcoders []*lpTypes.Transcode
 
 	// do a linear search to get the previous and next transcoder relative to 'del'
 	for i, t := range transcoders {
+		// fmt.Println(i, t.Address.Hex(), t.DelegatedStake.Int64())
 		if t.Address == del {
 			if i == 0 && len(transcoders) > 1 {
 				// 'del' is head
