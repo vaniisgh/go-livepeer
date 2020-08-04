@@ -765,10 +765,20 @@ func (c *client) Reward() (*types.Transaction, error) {
 	// reward = (current mintable tokens for the round * active transcoder stake) / total active stake
 	reward := new(big.Int).Div(new(big.Int).Mul(mintable, ep.TotalStake), totalBonded)
 
-	hints, err := c.simulateTranscoderPoolUpdate(addr, reward.Add(reward, ep.TotalStake))
+	// get the transcoder pool
+	transcoders, err := c.TranscoderPool()
 	if err != nil {
-		return nil, errors.Wrapf(err, "Unable to calculate hints, submitting reward transaction without hints")
+		return nil, errors.Wrapf(err, "unable to get transcoder pool")
 	}
+
+	// get max pool size
+	maxSize, err := c.GetTranscoderPoolMaxSize()
+	if err != nil {
+		return nil, errors.Wrapf(err, "unable to get transcoder pool max size")
+	}
+
+	hints := simulateTranscoderPoolUpdate(addr, reward.Add(reward, ep.TotalStake), transcoders, len(transcoders) == int(maxSize.Int64()))
+
 	return c.RewardWithHint(hints.PosPrev, hints.PosNext)
 }
 
@@ -776,25 +786,14 @@ func (c *client) Reward() (*types.Transaction, error) {
 
 // simulateTranscoderPoolUpdate simulates an update to the transcoder pool and returns the positional hints for a transcoder accordingly.
 // if the transcoder will not be in the updated set no hints will be returned
-func (c *client) simulateTranscoderPoolUpdate(del ethcommon.Address, newStake *big.Int) (lpTypes.StakingHints, error) {
-
-	// get max pool size
-	maxSize, err := c.GetTranscoderPoolMaxSize()
-	if err != nil {
-		return lpTypes.StakingHints{}, err
-	}
-	maxSizeInt := int(maxSize.Int64())
-
-	// get the transcoder pool
-	transcoders, err := c.TranscoderPool()
-	if err != nil {
-		return lpTypes.StakingHints{}, err
-	}
+func simulateTranscoderPoolUpdate(del ethcommon.Address, newStake *big.Int, transcoders []*lpTypes.Transcoder, isFull bool) lpTypes.StakingHints {
 
 	// if the transcoder pool is full and the newStake for 'del' is less than that of the last transcoder
-	// 'del' will not be in the active set and thus there are no hints to return.
-	if len(transcoders) == maxSizeInt && newStake.Cmp(transcoders[maxSizeInt-1].DelegatedStake) <= 0 {
-		return lpTypes.StakingHints{}, nil
+	// transcoder should become the tail.
+	if isFull && newStake.Cmp(transcoders[len(transcoders)-1].DelegatedStake) <= 0 {
+		return lpTypes.StakingHints{
+			PosPrev: transcoders[len(transcoders)-1].Address,
+		}
 	}
 
 	// Find the transcoder and update it's stake
@@ -817,11 +816,11 @@ func (c *client) simulateTranscoderPoolUpdate(del ethcommon.Address, newStake *b
 	})
 
 	// if the list was full evict the last transcoder
-	if len(transcoders) > maxSizeInt {
+	if isFull {
 		transcoders = transcoders[1:]
 	}
 
-	return findTranscoderHints(del, transcoders), nil
+	return findTranscoderHints(del, transcoders)
 }
 
 func findTranscoderHints(del ethcommon.Address, transcoders []*lpTypes.Transcoder) lpTypes.StakingHints {
